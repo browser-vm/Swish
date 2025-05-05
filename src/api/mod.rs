@@ -1,5 +1,4 @@
 /// Man... told you this was a mess
-
 use curl::easy::Easy2;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
@@ -60,7 +59,6 @@ pub fn new_easy2_download(
     file: File,
     file_size: u64,
 ) -> Result<Easy2<DownloadHandler<File>>, curl::Error> {
-
     let progress_bar = ProgressBar::new(file_size as u64);
     progress_bar.set_style(ProgressStyle::default_bar()
     .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})").unwrap()
@@ -176,10 +174,10 @@ pub fn post(
     log::debug!("Body: {}", String::from_utf8(body.clone()).unwrap());
     let mut retries = 0;
 
-    let mut easy2 = new_easy2_data(url.to_string(), additional_headers, true)?;
-    easy2.post_fields_copy(&body)?;
-
     loop {
+        let mut easy2 = new_easy2_data(url.to_string(), additional_headers.clone(), true)?;
+        easy2.post_fields_copy(&body)?;
+
         easy2.perform()?;
         log::debug!(
             "Response: {} - {:?}",

@@ -3,11 +3,13 @@ use crate::{
     api::{new_easy2_download, new_easy2_upload, post},
     errors::SwishError,
 };
+use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::json;
+use std::fmt;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::fmt;
+use std::sync::{Arc, Mutex};
 
 const SWISSTRANSFER_API: &str = "https://www.swisstransfer.com/api";
 const CHUNK_SIZE: usize = 52428800;
@@ -34,46 +36,36 @@ impl fmt::Display for LocalSwissfile {
 }
 
 impl LocalSwissfile {
-    pub fn new(path: std::path::PathBuf, container: &serde_json::Value) -> Self {
+    pub fn new(path: std::path::PathBuf, container: &serde_json::Value, file_uuid: String) -> Self {
         let path = path.clone();
-        let name = path.file_name().unwrap().to_str().unwrap().to_string();
-        let size = path.metadata().unwrap().len();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let size = path.metadata().map(|m| m.len()).unwrap_or(0);
         let chunks = build_chunks_array(size as usize, CHUNK_SIZE);
-        let container_uuid = container["container"]["UUID"].as_str().unwrap().to_string();
-        let files_uuid = container["filesUUID"][0].as_str().unwrap().to_string();
-        let upload_host = container["uploadHost"].as_str().unwrap().to_string();
+        let container_uuid = container["container"]["UUID"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let upload_host = container["uploadHost"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
 
-        // we miglht need to check if the file exists here idk
         Self {
             path,
             name,
             size,
             upload_host,
             container_uuid,
-            files_uuid,
+            files_uuid: file_uuid,
             chunks,
         }
     }
 
-    pub fn upload(&self) -> Result<(), SwishError> {
-        let file = File::open(&self.path)?;
-        let mut easy2 = new_easy2_upload("".to_string(), None, self.size as usize, &file)?; // Pass a reference to file
-
-        // Iterate over a reference to chunks to avoid moving it
-        for chunk in &self.chunks {
-            let mut file = File::open(&self.path)?;
-            file.seek(SeekFrom::Start(chunk.offset as u64))?;
-            let mut buffer = vec![0; chunk.size];
-            file.read_exact(&mut buffer)?;
-            let upload_url = self.build_chunked_upload_url(&chunk);
-            easy2.url(&upload_url)?;
-            easy2.post(true)?;
-            easy2.post_field_size(chunk.size as u64)?;
-            easy2.perform()?;
-        }
-        Ok(())
-    }
-
+    // Add back the build_chunked_upload_url method
     fn build_chunked_upload_url(&self, chunk: &Chunk) -> String {
         format!(
             "https://{}/api/uploadChunk/{}/{}/{}/{}",
@@ -87,6 +79,100 @@ impl LocalSwissfile {
                 "0"
             }
         )
+    }
+
+    pub fn upload(&self) -> Result<(), SwishError> {
+        log::debug!("Uploading file: {} (UUID: {})", self.name, self.files_uuid);
+
+        // Create a single progress bar for the entire file
+        let progress_bar = ProgressBar::new(self.size);
+        progress_bar.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})").unwrap()
+        .progress_chars("#>-"));
+
+        // Share this progress bar across all chunk uploads
+        let progress = Arc::new(Mutex::new(progress_bar));
+
+        // We want to upload each chunk in sequence
+        for (i, chunk) in self.chunks.iter().enumerate() {
+            log::debug!(
+                "Uploading chunk {}/{} of file {}",
+                i + 1,
+                self.chunks.len(),
+                self.name
+            );
+
+            // Open file and seek to chunk position
+            let mut file = File::open(&self.path)?;
+            file.seek(SeekFrom::Start(chunk.offset as u64))?;
+
+            // Create the upload URL for this chunk
+            let upload_url = self.build_chunked_upload_url(&chunk);
+            log::debug!("Chunk upload URL: {}", upload_url);
+
+            // Create a buffer for just this chunk
+            let mut buffer = vec![0u8; chunk.size];
+            file.read_exact(&mut buffer)?;
+
+            // Create a curl easy object
+            let mut easy = curl::easy::Easy::new();
+            easy.url(&upload_url)?;
+            easy.upload(true)?;
+            easy.post(true)?;
+
+            // Important: Set the correct content length for this chunk
+            easy.post_field_size(chunk.size as u64)?;
+
+            // Setup the headers
+            let mut list = curl::easy::List::new();
+            list.append("User-Agent: swisstransfer-webext/1.0")?;
+            list.append("Cookie: webext=1")?;
+            list.append("Referer: swish/1.0.1")?;
+            list.append("Content-Type: application/octet-stream")?;
+            easy.http_headers(list)?;
+
+            // Write the data using the shared progress bar
+            {
+                let mut data = buffer.as_slice();
+                let progress_clone = Arc::clone(&progress);
+
+                let mut transfer = easy.transfer();
+                transfer.read_function(move |into| {
+                    let amount = std::cmp::min(into.len(), data.len());
+                    if amount == 0 {
+                        return Ok(0);
+                    }
+
+                    into[..amount].copy_from_slice(&data[..amount]);
+
+                    // Update the shared progress bar
+                    progress_clone.lock().unwrap().inc(amount as u64);
+
+                    data = &data[amount..];
+                    Ok(amount)
+                })?;
+                transfer.perform()?;
+            }
+
+            // Check response
+            let response_code = easy.response_code()?;
+            if response_code >= 400 {
+                return Err(SwishError::InvalidResponse {
+                    response: format!(
+                        "Failed to upload chunk {}/{} of file {} with status code: {}",
+                        i + 1,
+                        self.chunks.len(),
+                        self.name,
+                        response_code
+                    ),
+                });
+            }
+        }
+
+        // Make sure the progress bar is marked as finished
+        progress.lock().unwrap().finish();
+
+        Ok(())
     }
 }
 
