@@ -1,6 +1,6 @@
 use crate::api::chunks::{build_chunks_array, Chunk};
 use crate::{
-    api::{new_easy2_download, new_easy2_upload, post},
+    api::{new_easy2_download, post},
     errors::SwishError,
 };
 use indicatif::{ProgressBar, ProgressStyle};

@@ -8,7 +8,6 @@ use crate::errors::SwishError;
 use curl::easy::List;
 use handlers::DataHandler;
 use handlers::DownloadHandler;
-use handlers::UploadHandler;
 use indicatif::{ProgressBar, ProgressStyle};
 use log;
 
@@ -85,49 +84,6 @@ pub fn new_easy2_download(
 
     easy2.url(&url)?;
     easy2.http_headers(headers)?;
-
-    Ok(easy2)
-}
-
-pub fn new_easy2_upload(
-    url: String,
-    custom_headers: Option<Vec<String>>,
-    upload_total_size: usize,
-    reader: &File,
-) -> Result<Easy2<UploadHandler<&File>>, curl::Error> {
-    let progress_bar = ProgressBar::new(upload_total_size as u64);
-    progress_bar.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})").unwrap()
-        .progress_chars("#>-"));
-
-    let mut easy2 = Easy2::new(UploadHandler {
-        reader,
-        progress: Arc::new(Mutex::new(progress_bar)),
-    });
-
-    let mut merged_headers: Vec<String> = DEFAULT_HEADERS.iter().map(|x| x.to_string()).collect();
-
-    // add headers
-    merged_headers.push("Content-Type: application/json".to_string());
-    merged_headers.push("Accept: application/json".to_string());
-
-    // add additional headers if any
-    if let Some(custom_headers) = custom_headers {
-        for header in custom_headers {
-            merged_headers.push(header);
-        }
-    }
-
-    let mut headers: List = List::new();
-    for header in merged_headers {
-        headers.append(header.as_str())?;
-    }
-
-    easy2.url(&url)?;
-    easy2.http_headers(headers)?;
-    easy2.post(true)?;
-    easy2.upload(true)?;
-    easy2.http_version(curl::easy::HttpVersion::V11)?;
 
     Ok(easy2)
 }
