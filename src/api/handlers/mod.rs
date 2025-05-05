@@ -36,7 +36,6 @@ pub struct DataHandler {
     pub data: Vec<u8>,
 }
 
-
 impl Handler for DataHandler {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
         self.data.extend_from_slice(data);
