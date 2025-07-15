@@ -1,3 +1,9 @@
+> [!IMPORTANT]  
+> The **upload** functionnality is **not working anymore** as Infomaniak removed [their reCAPTCHA bypass](https://github.com/Blutsh/Swish/issues/8) :(
+> 
+> Download feature is still working tho
+
+
 # Swish :rocket:
 
 A Command Line Tool for [Infomaniak](https://www.swisstransfer.com/)'s SwissTransfer Service. :cloud:
