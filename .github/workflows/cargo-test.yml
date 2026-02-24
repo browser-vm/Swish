@@ -1,0 +1,68 @@
+name: Cargo Test
+
+on:
+  # Run tests on PRs to verify code doesn't break before merge
+  pull_request:
+    types: [opened, synchronize]
+    # Your production branch. If not the default, update here and set Target Branch at https://gitauto.ai/settings/rules to match
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - Cargo.toml
+      - Cargo.lock
+  # Run tests after merge and collect coverage as canonical source of truth
+  push:
+    # Your production branch. If not the default, update here and set Target Branch at https://gitauto.ai/settings/rules to match
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - Cargo.toml
+      - Cargo.lock
+  # Allow manual trigger for debugging
+  workflow_dispatch:
+
+# Cancel older runs when new commits are pushed to the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-llvm-cov
+        if: github.event_name != 'pull_request'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run tests
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cargo test --verbose
+          else
+            cargo llvm-cov --verbose --lcov --output-path coverage/lcov.info
+          fi
+
+      - name: Upload coverage report
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/lcov.info
